@@ -19,20 +19,21 @@ export function registerShutdown(
   let shutdownPromise: Promise<void> | undefined;
 
   async function runShutdown(signal: NodeJS.Signals): Promise<void> {
-    logger.info({ signal }, "Graceful shutdown started");
-
-    // Make readiness fail before waiting or closing anything.
-    beginShutdown();
-
-    // This timer is a safety net, not a reason to keep Node alive.
-    const forceExitTimer = setTimeout(() => {
-      logger.fatal({ timeoutMs }, "Shutdown timed out; forcing exit");
-      process.exit(1);
-    }, timeoutMs);
-
-    forceExitTimer.unref();
+    let forceExitTimer: ReturnType<typeof setTimeout> | undefined;
 
     try {
+      logger.info({ signal }, "Graceful shutdown started");
+
+      // Make readiness fail before waiting or closing anything.
+      beginShutdown();
+
+      forceExitTimer = setTimeout(() => {
+        logger.fatal({ timeoutMs }, "Shutdown timed out; forcing exit");
+        process.exit(1);
+      }, timeoutMs);
+
+      forceExitTimer.unref();
+
       if (options.drainMs > 0) {
         logger.info(
           { drainMs: options.drainMs },
@@ -44,10 +45,9 @@ export function registerShutdown(
         });
       }
 
-      // Execute tasks in order. A failure must not prevent
-      // the remaining cleanup tasks from running.
       let failed = false;
 
+      // Run cleanup sequentially so resource ownership/order is preserved.
       for (const task of tasks) {
         try {
           logger.info({ task: task.name }, "Shutdown task started");
@@ -68,17 +68,22 @@ export function registerShutdown(
       logger.fatal({ err: error }, "Shutdown sequence failed");
       process.exitCode = 1;
     } finally {
-      clearTimeout(forceExitTimer);
+      if (forceExitTimer !== undefined) {
+        clearTimeout(forceExitTimer);
+      }
     }
   }
 
   function shutdown(signal: NodeJS.Signals): void {
-    // SIGINT and SIGTERM are different events. Guard both.
+    // Prevent SIGINT and SIGTERM from starting two shutdown sequences.
     if (shutdownPromise) {
       return;
     }
 
-    shutdownPromise = runShutdown(signal);
+    shutdownPromise = runShutdown(signal).catch((error: unknown) => {
+      logger.fatal({ err: error }, "Unexpected shutdown failure");
+      process.exit(1);
+    });
   }
 
   process.once("SIGTERM", () => shutdown("SIGTERM"));
