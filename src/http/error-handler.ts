@@ -1,8 +1,16 @@
+import type { FastifyError } from "fastify";
 import { AppError } from "../shared/errors.js";
 import type { AppInstance } from "./app-types.js";
 
 export function registerErrorHandler(app: AppInstance) {
-  app.setErrorHandler((error, request, reply) => {
+  app.setErrorHandler((error: FastifyError, request, reply) => {
+    if (error.validation) {
+      return reply.code(400).send({
+        error: "ValidationError",
+        message: "Invalid request data",
+      });
+    }
+
     if (error instanceof AppError) {
       const log = {
         err: error,
@@ -20,6 +28,29 @@ export function registerErrorHandler(app: AppInstance) {
       return reply.code(error.statusCode).send({
         error: error.code,
         message: error.message,
+      });
+    }
+
+    const statusCode = error.statusCode;
+
+    if (
+      typeof statusCode === "number" &&
+      statusCode >= 400 &&
+      statusCode < 500
+    ) {
+      [request.log.warn({ err: error, statusCode }, "Client request rejected")];
+
+      if (statusCode === 429) {
+        return reply.code(429).send({
+          error: "TooManyRequests",
+          message: "Too many requests. Please try again later.",
+        });
+      }
+
+      return reply.code(statusCode).send({
+        error: error.code ?? "ClientError",
+        message:
+          statusCode >= 500 ? "An unexpected error occurred." : error.message,
       });
     }
 

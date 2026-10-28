@@ -1,9 +1,9 @@
-let shuttingdown = false;
+let shuttingDown = false;
 
 export function beginShutdown(): void {
-    shuttingdown = true;
+  shuttingDown = true;
 }
 
 export function isShuttingDown(): boolean {
-    return shuttingdown;
+  return shuttingDown;
 }
