@@ -2,62 +2,48 @@ import Fastify from "fastify";
 import { logger } from "../infra/logger.js";
 import { randomUUID } from "node:crypto";
 import { registerErrorHandler } from "./error-handler.js";
-import { prisma } from "../infra/prisma.js";
-import { redis } from "../infra/redis.js";
-import { withTimeout } from "../shared/with-timeout.js";
-import { isShuttingDown } from "../shared/lifecycle.js";
+import fastifyJwt from "@fastify/jwt";
+import { env } from "../config/env.js";
+import authRoutes from "./routes/auth.routes.js";
+import healthRoutes from "./routes/health.routes.js";
+import rateLimit from "@fastify/rate-limit";
+import {
+  serializerCompiler,
+  validatorCompiler,
+} from "fastify-type-provider-zod";
 
-export function buildServer() {
+export async function buildServer() {
   const app = Fastify({
     loggerInstance: logger,
     genReqId: () => `req-${randomUUID()}`,
   });
 
+  app.setValidatorCompiler(validatorCompiler);
+  app.setSerializerCompiler(serializerCompiler);
+
   registerErrorHandler(app);
 
-  app.get("/healthz", async () => {
-    return { status: "ok" };
+  await app.register(fastifyJwt, {
+    secret: env.JWT_SECRET,
+    sign: {
+      algorithm: "HS256",
+      expiresIn: "15m",
+      iss: "lyncut",
+      aud: "lyncut-api",
+    },
+    verify: {
+      allowedIss: "lyncut",
+      allowedAud: "lyncut-api",
+      algorithms: ["HS256"],
+    },
   });
 
-  app.get("/readyz", async (request, reply) => {
-    if (isShuttingDown()) {
-      return reply.code(503).send({ status: "not_ready" });
-    }
-    const timeoutMs = 2_000;
+  await app.register(healthRoutes);
 
-    const [postgresResult, redisResult] = await Promise.allSettled([
-      withTimeout(prisma.$queryRaw`SELECT 1`, timeoutMs, "postgres"),
-      withTimeout(redis.ping(), timeoutMs, "redis"),
-    ]);
+  await app.register(rateLimit, { global: false });
 
-    const postgresReady = postgresResult.status === "fulfilled";
-    const redisReady = redisResult.status === "fulfilled";
-
-    if (!postgresReady || !redisReady) {
-      if (postgresResult.status === "rejected") {
-        request.log.error(
-          {
-            err: postgresResult.reason,
-            component: "postgres",
-          },
-          "Readiness check failed",
-        );
-      }
-
-      if (redisResult.status === "rejected") {
-        request.log.error(
-          {
-            err: redisResult.reason,
-            component: "redis",
-          },
-          "Readiness check failed",
-        );
-      }
-      return reply.code(503).send({ status: "not_ready" });
-    }
-    return reply.code(200).send({
-      status: "ready",
-    });
+  await app.register(authRoutes, {
+    prefix: "/api/auth",
   });
 
   return app;
