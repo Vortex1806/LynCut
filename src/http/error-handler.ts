@@ -38,7 +38,7 @@ export function registerErrorHandler(app: AppInstance) {
       statusCode >= 400 &&
       statusCode < 500
     ) {
-      [request.log.warn({ err: error, statusCode }, "Client request rejected")];
+      request.log.warn({ err: error, statusCode }, "Client request rejected");
 
       if (statusCode === 429) {
         return reply.code(429).send({
@@ -49,8 +49,7 @@ export function registerErrorHandler(app: AppInstance) {
 
       return reply.code(statusCode).send({
         error: error.code ?? "ClientError",
-        message:
-          statusCode >= 500 ? "An unexpected error occurred." : error.message,
+        message: error.message,
       });
     }
 

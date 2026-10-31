@@ -11,6 +11,14 @@ import {
   serializerCompiler,
   validatorCompiler,
 } from "fastify-type-provider-zod";
+import "fastify";
+import type { preHandlerHookHandler } from "fastify";
+
+declare module "fastify" {
+  interface FastifyInstance {
+    authenticate: preHandlerHookHandler;
+  }
+}
 
 export async function buildServer() {
   const app = Fastify({
@@ -36,6 +44,16 @@ export async function buildServer() {
       allowedAud: "lyncut-api",
       algorithms: ["HS256"],
     },
+  });
+
+  app.decorate("authenticate", async function (request, reply) {
+    try {
+      await request.jwtVerify();
+    } catch (error) {
+      return reply.code(401).send({
+        message: "Unauthorized",
+      });
+    }
   });
 
   await app.register(healthRoutes);
