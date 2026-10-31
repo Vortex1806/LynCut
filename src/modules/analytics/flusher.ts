@@ -2,11 +2,33 @@ import { prisma } from "../../infra/prisma.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { logger } from "../../infra/logger.js";
 import { redis } from "../../infra/redis.js";
+import { isShuttingDown } from "../../shared/lifecycle.js";
+import { VISIT_COUNTS_HASH, VISIT_COUNTS_PROCESSING } from "./keys.js";
 
-const COUNTS_HASH = "link:visit-counts";
-const PROCESSING_HASH = "link:visit-counts:processing";
+const COUNTS_HASH = VISIT_COUNTS_HASH;
+const PROCESSING_HASH = VISIT_COUNTS_PROCESSING;
 
 const FLUSH_INTERVAL_MS = 10_000;
+
+/** Resolves early when shutdown begins, so the final flush is not delayed. */
+let wakeEarly: (() => void) | null = null;
+
+export function wakeFlusher(): void {
+  wakeEarly?.();
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(finish, ms);
+    wakeEarly = finish;
+
+    function finish(): void {
+      clearTimeout(timer);
+      wakeEarly = null;
+      resolve();
+    }
+  });
+}
 
 type VisitCount = {
   shortCode: string;
@@ -77,13 +99,19 @@ export async function flushVisitCounts(): Promise<void> {
 export async function startFlusher(): Promise<void> {
   logger.info({ intervalMs: FLUSH_INTERVAL_MS }, "Analytics flusher started");
 
-  while (true) {
+  while (!isShuttingDown()) {
     try {
       await flushVisitCounts();
     } catch (error) {
       logger.error({ err: error }, "Failed to flush visit counts");
     }
 
-    await new Promise((resolve) => setTimeout(resolve, FLUSH_INTERVAL_MS));
+    if (isShuttingDown()) break;
+
+    // Interruptible: shutdown calls wakeFlusher() rather than waiting out
+    // the full interval doing nothing.
+    await sleep(FLUSH_INTERVAL_MS);
   }
+
+  logger.info("Analytics flusher stopped");
 }

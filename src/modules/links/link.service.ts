@@ -33,20 +33,6 @@ export class LinksService {
     return `link:${shortCode}`;
   }
 
-  async recordVisit(shortCode: string): Promise<string | null> {
-    return redis.xadd(
-      "link:visits",
-      "MAXLEN",
-      "~",
-      100000,
-      "*",
-      "shortCode",
-      shortCode,
-      "visitedAt",
-      new Date().toISOString(),
-    );
-  }
-
   private async invalidateCache(shortCode: string): Promise<void> {
     try {
       await redis.del(this.getCacheKey(shortCode));
@@ -58,25 +44,23 @@ export class LinksService {
     }
   }
 
+  /**
+   * Prisma reports a unique-constraint violation as P2002, but `meta.target`
+   * carries the DATABASE identifier ("short_code" / "links_short_code_key"),
+   * not the Prisma field name — so matching on "shortCode" never fired and
+   * the violation surfaced as a 500.
+   *
+   * On the Link model the only unique columns are id (a cuid, so a collision
+   * is not a real scenario) and shortCode, which makes the code alone a
+   * sufficient signal.
+   */
   private isShortCodeUniqueViolation(error: unknown): boolean {
-    if (
-      typeof error !== "object" ||
-      error === null ||
-      !("code" in error) ||
-      error.code !== "P2002" ||
-      !("meta" in error) ||
-      typeof error.meta !== "object" ||
-      error.meta === null ||
-      !("target" in error.meta)
-    ) {
-      return false;
-    }
-
-    const target = error.meta.target;
-
-    return Array.isArray(target)
-      ? target.includes("shortCode")
-      : typeof target === "string" && target.includes("shortCode");
+    return (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "P2002"
+    );
   }
 
   private isRecordNotFound(error: unknown): boolean {

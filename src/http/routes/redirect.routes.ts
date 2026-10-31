@@ -2,6 +2,7 @@ import { Router } from "express";
 import { shortCodeParamSchema } from "../../modules/links/link.schema.js";
 import { LinksService } from "../../modules/links/link.service.js";
 import { logger } from "../../infra/logger.js";
+import { recordVisit } from "../../modules/analytics/events.js";
 
 export function createRedirectRouter(): Router {
   const router = Router();
@@ -16,7 +17,7 @@ export function createRedirectRouter(): Router {
     const { shortCode } = shortCodeParamSchema.parse(req.params);
     const targetUrl = await links.getRedirectTarget(shortCode);
 
-    void links.recordVisit(shortCode).catch((error) => {
+    void recordVisit(shortCode).catch((error) => {
       logger.warn({ err: error, shortCode }, "Failed to record link visit");
     });
 

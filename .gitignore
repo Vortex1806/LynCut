@@ -6,3 +6,4 @@ src/generated
 .agents
 .claude
 .windsurf
+.env.production

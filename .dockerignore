@@ -1,0 +1,30 @@
+# Never ship the host's node_modules: argon2 is a native module, so macOS
+# arm64 binaries would be copied into a Linux image and fail at runtime.
+# It also destroys layer caching, since it changes on every install.
+node_modules
+**/node_modules
+
+# Build output is produced inside the image.
+dist
+src/generated
+
+# Secrets must come from the environment, never be baked into a layer.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+.github
+tests
+load
+*.test.ts
+vitest.config.ts
+tsconfig.test.json
+test-recovery.sh
+README.md
+*.md
+npm-debug.log*
+.DS_Store
+.vscode
+.idea

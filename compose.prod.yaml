@@ -1,0 +1,156 @@
+# Production stack. Run with:
+#   docker compose -f compose.prod.yaml --env-file .env.production up -d --build
+#
+# compose.yaml stays as the development stack (data stores only, ports on
+# the host, app running from tsx).
+
+x-app-env: &app-env
+  NODE_ENV: production
+  DATABASE_URL: postgresql://app:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/appdb
+  REDIS_URL: redis://redis:6379
+  JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET}
+  BASE_URL: ${BASE_URL:?set BASE_URL}
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  BLOCK_PRIVATE_ADDRESSES: "true"
+
+# Every container writes JSON to stdout. Without rotation those files grow
+# until the disk is full, which takes down Postgres along with everything else.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: appdb
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d appdb"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+    logging: *logging
+
+  redis:
+    image: redis:8-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 384mb
+      - --maxmemory-policy
+      - noeviction
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    logging: *logging
+
+  migrate:
+    build:
+      context: .
+      target: migrator
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    logging: *logging
+
+  api:
+    build:
+      context: .
+      target: runtime
+    command: ["node", "dist/api.js"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      PORT: "3000"
+    # Bound to localhost: cloudflared reaches it over the host, and nothing
+    # else should. On a VPS, "3000:3000" would publish it to the internet.
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # No curl in the slim image; Node 22 has global fetch.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # Must exceed the drain wait plus in-flight requests, or Docker SIGKILLs
+    # mid-shutdown and the graceful shutdown is theatre.
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    logging: *logging
+
+  worker:
+    build:
+      context: .
+      target: runtime
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+    environment:
+      <<: *app-env
+      WORKER_PORT: "3001"
+      # Stable across container recreation. Without it the hostname is the
+      # container id, which changes — orphaning that consumer's pending
+      # messages under a name that never returns.
+      WORKER_NAME: worker-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # /healthz reports 503 when the consume loop has stalled, so this
+      # catches a hung worker rather than merely a dead one.
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # BLOCK_MS (5s) before the loop notices, plus the final flush.
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 384m
+    logging: *logging
+
+volumes:
+  postgres_data:
+  redis_data:
