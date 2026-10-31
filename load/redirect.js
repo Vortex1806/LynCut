@@ -19,8 +19,21 @@ const redirectLatency = new Trend("redirect_latency", true);
 const redirectOk = new Rate("redirect_ok");
 
 export const options = {
+  summaryTrendStats: ["avg", "min", "med", "p(90)", "p(95)", "p(99)", "max"],
+
   scenarios: {
-    redirect: {
+    // STEADY=1 measures latency at a load the box can absorb. The ramping
+    // profile finds the ceiling; this one finds what it feels like below it.
+    ...(__ENV.STEADY
+      ? {
+          steady: {
+            executor: "constant-vus",
+            vus: Number(__ENV.VUS || 25),
+            duration: __ENV.DURATION || "60s",
+          },
+        }
+      : {}),
+    ...(__ENV.STEADY ? {} : { redirect: {
       executor: "ramping-vus",
       startVUs: 0,
       stages: [
@@ -30,7 +43,7 @@ export const options = {
         { duration: "30s", target: 0 },    // ramp down
       ],
       gracefulRampDown: "10s",
-    },
+    } }),
   },
   thresholds: {
     // p99, not the average: an average of 10ms hides 1% of requests taking
@@ -51,7 +64,9 @@ export function setup() {
   const signup = http.post(
     `${BASE}/api/auth/signup`,
     JSON.stringify({ name: "Load Test", email, password: "supersecret123" }),
-    { headers },
+    // responseType overrides discardResponseBodies, which is set globally
+    // for the redirect phase where bodies are not needed.
+    { headers, responseType: "text" },
   );
 
   if (signup.status !== 201) {
@@ -66,7 +81,7 @@ export function setup() {
     const res = http.post(
       `${BASE}/api/links`,
       JSON.stringify({ targetUrl: `https://example.com/load/${i}` }),
-      { headers: auth },
+      { headers: auth, responseType: "text" },
     );
 
     if (res.status === 201) codes.push(res.json("shortCode"));
