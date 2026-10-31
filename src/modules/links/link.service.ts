@@ -3,7 +3,6 @@ import {
   NotFoundError,
   ValidationError,
 } from "../../shared/errors.js";
-
 import {
   createLink,
   deleteLink,
@@ -12,23 +11,51 @@ import {
   setActive,
   updateLink,
 } from "./link.repository.js";
-
 import { generateShortCode, validateCustomCode } from "./shortcode.js";
-
 import { validateDestinationUrl } from "./url-safety.js";
-
 import { redis } from "../../infra/redis.js";
+import { logger } from "../../infra/logger.js";
 
+type RedirectCacheEntry = {
+  targetUrl: string;
+  isActive: boolean;
+};
+
+const NOT_FOUND = "__NOT_FOUND__";
+
+const REDIRECT_CACHE_TTL = 300;
 const MAX_GENERATION_ATTEMPTS = 5;
 const MAX_PAGE_SIZE = 100;
+const NEGATIVE_CACHE_TTL = 60;
 
 export class LinksService {
   private getCacheKey(shortCode: string): string {
     return `link:${shortCode}`;
   }
 
+  async recordVisit(shortCode: string): Promise<string | null> {
+    return redis.xadd(
+      "link:visits",
+      "MAXLEN",
+      "~",
+      100000,
+      "*",
+      "shortCode",
+      shortCode,
+      "visitedAt",
+      new Date().toISOString(),
+    );
+  }
+
   private async invalidateCache(shortCode: string): Promise<void> {
-    await redis.del(this.getCacheKey(shortCode));
+    try {
+      await redis.del(this.getCacheKey(shortCode));
+    } catch (error) {
+      logger.warn(
+        { err: error, shortCode },
+        "Failed to invalidate redirect cache",
+      );
+    }
   }
 
   private isShortCodeUniqueViolation(error: unknown): boolean {
@@ -74,11 +101,13 @@ export class LinksService {
       const shortCode = validateCustomCode(input.customCode);
 
       try {
-        return await createLink({
+        const link = await createLink({
           userId: input.userId,
           shortCode,
           targetUrl,
         });
+        await this.invalidateCache(shortCode);
+        return link;
       } catch (error) {
         if (this.isShortCodeUniqueViolation(error)) {
           throw new ConflictError("This short code is already taken.");
@@ -93,11 +122,13 @@ export class LinksService {
       const shortCode = generateShortCode();
 
       try {
-        return await createLink({
+        const link = await createLink({
           userId: input.userId,
           shortCode,
           targetUrl,
         });
+        await this.invalidateCache(shortCode);
+        return link;
       } catch (error) {
         if (!this.isShortCodeUniqueViolation(error)) {
           throw error;
@@ -190,9 +221,67 @@ export class LinksService {
   }
 
   async getRedirectTarget(shortCode: string) {
+    const cacheKey = this.getCacheKey(shortCode);
+    let cached: string | null = null;
+
+    try {
+      cached = await redis.get(cacheKey);
+    } catch (error) {
+      logger.warn({ err: error, shortCode }, "Redis lookup failed");
+    }
+
+    if (cached !== null) {
+      if (cached === NOT_FOUND) {
+        throw new NotFoundError("Link not found.");
+      }
+      try {
+        const entry = JSON.parse(cached) as RedirectCacheEntry;
+
+        if (
+          typeof entry.targetUrl === "string" &&
+          typeof entry.isActive === "boolean"
+        ) {
+          if (!entry.isActive) {
+            throw new NotFoundError("Link not found.");
+          }
+          return entry.targetUrl;
+        }
+      } catch (error) {
+        if (error instanceof NotFoundError) {
+          throw error;
+        }
+        logger.warn({ err: error, shortCode }, "Invalid redirect cache entry");
+      }
+    }
+
     const link = await findByShortCode(shortCode);
 
-    if (!link || !link.isActive) {
+    if (!link) {
+      try {
+        await redis.set(cacheKey, NOT_FOUND, "EX", NEGATIVE_CACHE_TTL);
+      } catch (error) {
+        logger.warn({ err: error, shortCode }, "Failed to cache missing link");
+      }
+      throw new NotFoundError("Link not found.");
+    }
+
+    const entry: RedirectCacheEntry = {
+      targetUrl: link.targetUrl,
+      isActive: link.isActive,
+    };
+
+    try {
+      await redis.set(
+        cacheKey,
+        JSON.stringify(entry),
+        "EX",
+        REDIRECT_CACHE_TTL,
+      );
+    } catch (error) {
+      logger.warn({ err: error, shortCode }, "Redis cache population failed");
+    }
+
+    if (!entry.isActive) {
       throw new NotFoundError("Link not found.");
     }
 

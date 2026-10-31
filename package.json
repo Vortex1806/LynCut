@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch --env-file=.env src/api.ts",
-    "dev:worker": "tsx watch --env-file=.env src/worker.ts",
+    "dev:worker": "tsx watch --env-file=.env src/workers/analytics.worker.ts",
     "start": "node --env-file=.env dist/api.js",
     "build": "tsc",
     "typecheck": "tsc --noEmit",

@@ -13,5 +13,5 @@ export const blockingRedis = new Redis(env.REDIS_URL, {
 });
 
 blockingRedis.on("error", (error) => {
-  logger.error("Blocking Redis error: " + error.message);
+  logger.error({ err: error }, "Blocking Redis error");
 });

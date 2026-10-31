@@ -11,6 +11,7 @@ import {
 import { LinksService } from "../../modules/links/link.service.js";
 import { requireAuth, userId } from "../middleware/require-auth.js";
 import { apiLimiter } from "../middleware/rate-limit.js";
+import { idempotent } from "../middleware/idempotency.js";
 
 export function createLinkRouter(): Router {
   const router = Router();
@@ -19,7 +20,7 @@ export function createLinkRouter(): Router {
   // Every route below needs a signed-in user.
   router.use(requireAuth, apiLimiter);
 
-  router.post("/", async (req, res) => {
+  router.post("/", idempotent(), async (req, res) => {
     const input = createLinkBodySchema.parse(req.body);
 
     // The key is included only when defined: exactOptionalPropertyTypes
@@ -49,7 +50,11 @@ export function createLinkRouter(): Router {
     const { shortCode } = shortCodeParamSchema.parse(req.params);
     const { targetUrl } = updateLinkBodySchema.parse(req.body);
 
-    const link = await links.update({ userId: userId(req), shortCode, targetUrl });
+    const link = await links.update({
+      userId: userId(req),
+      shortCode,
+      targetUrl,
+    });
 
     res.status(200).json(linkResponseSchema.parse(link));
   });
@@ -58,7 +63,11 @@ export function createLinkRouter(): Router {
     const { shortCode } = shortCodeParamSchema.parse(req.params);
     const { isActive } = setActiveBodySchema.parse(req.body);
 
-    const link = await links.setActive({ userId: userId(req), shortCode, isActive });
+    const link = await links.setActive({
+      userId: userId(req),
+      shortCode,
+      isActive,
+    });
 
     res.status(200).json(linkResponseSchema.parse(link));
   });

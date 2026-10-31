@@ -18,6 +18,7 @@ const envSchema = z.object({
     .enum(["true", "false"])
     .default("true")
     .transform((v) => v === "true"),
+  WORKER_NAME: z.string().min(1).max(32).optional(),
 });
 
 const result = envSchema.safeParse(process.env);

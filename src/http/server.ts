@@ -29,6 +29,17 @@ export function buildServer(): Express {
     pinoHttp({
       logger,
       genReqId: () => randomUUID(),
+      autoLogging: {
+        ignore: (req) => {
+          const path = req.url ?? "";
+
+          return (
+            !path.startsWith("/api/") &&
+            path !== "/healthz" &&
+            path !== "/readyz"
+          );
+        },
+      },
     }),
   );
 
