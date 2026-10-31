@@ -7,7 +7,7 @@ import { ValidationError } from "../../shared/errors.js";
 
 const MAX_URL_LENGTH = 2048;
 
-const BLOCK_PRIVATE_ADDRESSES = env.NODE_ENV === "production";
+const BLOCK_PRIVATE_ADDRESSES = env.BLOCK_PRIVATE_ADDRESSES;
 
 function rejectUrl(message: string): never {
   throw new ValidationError(message);
@@ -53,7 +53,7 @@ export async function validateDestinationUrl(value: string): Promise<URL> {
   }
 
   if (url.username || url.password) {
-    rejectUrl("URLs containting credentials are not allowed");
+    rejectUrl("URLs containing credentials are not allowed");
   }
 
   if (!BLOCK_PRIVATE_ADDRESSES) {
@@ -89,23 +89,4 @@ export async function validateDestinationUrl(value: string): Promise<URL> {
   }
 
   return url;
-}
-
-/**
- * Resolve a redirect's Location relative to the current URL,
- * then apply the same destination checks.
- */
-export async function validateRedirectTarget(
-  currentUrl: URL,
-  location: string,
-): Promise<URL> {
-  let target: URL;
-
-  try {
-    target = new URL(location, currentUrl);
-  } catch {
-    return rejectUrl("Invalid redirect destination.");
-  }
-
-  return validateDestinationUrl(target.toString());
 }

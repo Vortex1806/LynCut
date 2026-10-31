@@ -8,6 +8,7 @@ import {
 } from "./tokens.js";
 
 type SignAccessToken = (userId: string) => Promise<string>;
+const DUMMY_HASH = await hash("not-a-real-password");
 
 export class AuthService {
   constructor(private readonly signAccessToken: SignAccessToken) {}
@@ -46,6 +47,8 @@ export class AuthService {
     const user = await findUserByEmail(input.email);
 
     if (!user || !(await verify(input.password, user.passwordHash))) {
+      //This makes sure the attacker cannot know that the email exists or not.
+      await verify(input.password, DUMMY_HASH);
       throw new UnauthorizedError("Invalid email or password");
     }
 

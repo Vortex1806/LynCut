@@ -1,68 +1,48 @@
-import Fastify from "fastify";
-import { logger } from "../infra/logger.js";
+import express, { type Express } from "express";
+import helmet from "helmet";
+import { pinoHttp } from "pino-http";
 import { randomUUID } from "node:crypto";
-import { registerErrorHandler } from "./error-handler.js";
-import fastifyJwt from "@fastify/jwt";
-import { env } from "../config/env.js";
-import authRoutes from "./routes/auth.routes.js";
-import healthRoutes from "./routes/health.routes.js";
-import rateLimit from "@fastify/rate-limit";
-import {
-  serializerCompiler,
-  validatorCompiler,
-} from "fastify-type-provider-zod";
-import "fastify";
-import type { preHandlerHookHandler } from "fastify";
 
-declare module "fastify" {
-  interface FastifyInstance {
-    authenticate: preHandlerHookHandler;
-  }
-}
+import { logger } from "../infra/logger.js";
+import { errorHandler, notFoundHandler } from "./error-handler.js";
+import { createAuthRouter } from "./routes/auth.routes.js";
+import { createHealthRouter } from "./routes/health.routes.js";
+import { createLinkRouter } from "./routes/link.routes.js";
+import { createRedirectRouter } from "./routes/redirect.routes.js";
 
-export async function buildServer() {
-  const app = Fastify({
-    loggerInstance: logger,
-    genReqId: () => `req-${randomUUID()}`,
-  });
+const JSON_BODY_LIMIT = "16kb";
 
-  app.setValidatorCompiler(validatorCompiler);
-  app.setSerializerCompiler(serializerCompiler);
+const authRouter = createAuthRouter();
+const linksRouter = createLinkRouter();
 
-  registerErrorHandler(app);
+export function buildServer(): Express {
+  const app = express();
 
-  await app.register(fastifyJwt, {
-    secret: env.JWT_SECRET,
-    sign: {
-      algorithm: "HS256",
-      expiresIn: "15m",
-      iss: "lyncut",
-      aud: "lyncut-api",
-    },
-    verify: {
-      allowedIss: "lyncut",
-      allowedAud: "lyncut-api",
-      algorithms: ["HS256"],
-    },
-  });
+  // Behind Cloudflare / a reverse proxy, so rate limiting and logging see
+  // the real client IP rather than the proxy's.
+  app.set("trust proxy", 1);
+  app.disable("x-powered-by");
 
-  app.decorate("authenticate", async function (request, reply) {
-    try {
-      await request.jwtVerify();
-    } catch (error) {
-      return reply.code(401).send({
-        message: "Unauthorized",
-      });
-    }
-  });
+  app.use(helmet());
 
-  await app.register(healthRoutes);
+  app.use(
+    pinoHttp({
+      logger,
+      genReqId: () => randomUUID(),
+    }),
+  );
 
-  await app.register(rateLimit, { global: false });
+  app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
-  await app.register(authRoutes, {
-    prefix: "/api/auth",
-  });
+  app.use(createHealthRouter());
+  app.use("/api/auth", authRouter);
+  app.use("/api/links", linksRouter);
+
+  // Registered last: "/:shortCode" would otherwise shadow everything above.
+  app.use(createRedirectRouter());
+
+  app.use(notFoundHandler);
+  app.use(errorHandler);
 
   return app;
 }

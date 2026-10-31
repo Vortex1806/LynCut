@@ -14,6 +14,10 @@ const envSchema = z.object({
     .enum(["fatal", "error", "warn", "info", "debug", "trace"])
     .default("info"),
   SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).default(5000),
+  BLOCK_PRIVATE_ADDRESSES: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
 });
 
 const result = envSchema.safeParse(process.env);

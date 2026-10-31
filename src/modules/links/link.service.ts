@@ -123,7 +123,7 @@ export class LinksService {
 
     return listByUser(input.userId, {
       limit,
-      cursor: input.cursor as string,
+      ...(input.cursor !== undefined && { cursor: input.cursor }),
     });
   }
 

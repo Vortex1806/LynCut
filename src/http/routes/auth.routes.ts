@@ -1,6 +1,4 @@
-import type { FastifyPluginAsync } from "fastify";
-import type { ZodTypeProvider } from "fastify-type-provider-zod";
-
+import { Router } from "express";
 import {
   signupBodySchema,
   loginBodySchema,
@@ -9,88 +7,42 @@ import {
   authResponseSchema,
   refreshResponseSchema,
 } from "../../modules/auth/auth.schema.js";
-
 import { AuthService } from "../../modules/auth/auth.service.js";
+import { signAccessToken } from "../../modules/auth/jwt.js";
+import { authLimiter, refreshLimiter } from "../middleware/rate-limit.js";
 
-const authRoutes: FastifyPluginAsync = async (app) => {
-  const api = app.withTypeProvider<ZodTypeProvider>();
+export function createAuthRouter(): Router {
+  const router = Router();
 
-  const authService = new AuthService(async (userId) =>
-    app.jwt.sign({ sub: userId }),
-  );
+  const authService = new AuthService(async (id) => signAccessToken(id));
 
-  api.post(
-    "/signup",
-    {
-      config: {
-        rateLimit: {
-          max: 5,
-          timeWindow: "1 minute",
-        },
-      },
-      schema: {
-        body: signupBodySchema,
-        response: { 201: authResponseSchema },
-      },
-    },
-    async (request, reply) => {
-      const result = await authService.signup(request.body);
-      return reply.code(201).send(result);
-    },
-  );
+  router.post("/signup", authLimiter, async (req, res) => {
+    const input = signupBodySchema.parse(req.body);
+    const result = await authService.signup(input);
 
-  api.post(
-    "/login",
-    {
-      config: {
-        rateLimit: {
-          max: 5,
-          timeWindow: "1 minute",
-        },
-      },
-      schema: {
-        body: loginBodySchema,
-        response: { 200: authResponseSchema },
-      },
-    },
-    async (request, reply) => {
-      const result = await authService.login(request.body);
-      return reply.send(result);
-    },
-  );
+    res.status(201).json(authResponseSchema.parse(result));
+  });
 
-  api.post(
-    "/refresh",
-    {
-      config: {
-        rateLimit: {
-          max: 3,
-          timeWindow: "1 minute",
-        },
-      },
-      schema: {
-        body: refreshBodySchema,
-        response: { 200: refreshResponseSchema },
-      },
-    },
-    async (request, reply) => {
-      const result = await authService.refresh(request.body);
-      return reply.send(result);
-    },
-  );
+  router.post("/login", authLimiter, async (req, res) => {
+    const input = loginBodySchema.parse(req.body);
+    const result = await authService.login(input);
 
-  api.post(
-    "/logout",
-    {
-      schema: {
-        body: logoutBodySchema,
-      },
-    },
-    async (request, reply) => {
-      await authService.logout(request.body);
-      return reply.code(204).send();
-    },
-  );
-};
+    res.status(200).json(authResponseSchema.parse(result));
+  });
 
-export default authRoutes;
+  router.post("/refresh", refreshLimiter, async (req, res) => {
+    const input = refreshBodySchema.parse(req.body);
+    const result = await authService.refresh(input);
+
+    res.status(200).json(refreshResponseSchema.parse(result));
+  });
+
+  router.post("/logout", async (req, res) => {
+    const input = logoutBodySchema.parse(req.body);
+    await authService.logout(input);
+
+    res.status(204).send();
+  });
+
+  return router;
+}
