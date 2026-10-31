@@ -88,10 +88,11 @@ services:
     environment:
       <<: *app-env
       PORT: "3000"
-    # Bound to localhost: cloudflared reaches it over the host, and nothing
-    # else should. On a VPS, "3000:3000" would publish it to the internet.
+    # Defaults to localhost so nothing is exposed. Set API_BIND=0.0.0.0 in
+    # .env.production only while load testing from another instance, with
+    # the security group restricting who can reach the port.
     ports:
-      - "127.0.0.1:3000:3000"
+      - "${API_BIND:-127.0.0.1}:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
