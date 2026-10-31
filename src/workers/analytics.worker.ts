@@ -4,6 +4,7 @@ import { logger } from "../infra/logger.js";
 import { blockingRedis } from "../infra/blocking-redis.js";
 import { env } from "../config/env.js";
 import { redis } from "../infra/redis.js";
+import { startFlusher } from "../modules/analytics/flusher.js";
 
 const STREAM = "link:visits";
 const GROUP = "analytics-workers";
@@ -12,7 +13,7 @@ const COUNTS_HASH = "link:visit-counts";
 const BATCH_SIZE = 100;
 const BLOCK_MS = 5_000;
 
-const consumerName = env.WORKER_NAME ?? os.hostname();
+const consumerName = `${env.WORKER_NAME ?? os.hostname()}-${process.pid}`;
 
 type StreamEntry = [id: string, fields: string[]];
 
@@ -112,8 +113,14 @@ async function runWorker(): Promise<void> {
   }
 }
 
-runWorker().catch(async (error) => {
+async function main(): Promise<void> {
+  await Promise.all([runWorker(), startFlusher()]);
+}
+
+main().catch(async (error) => {
   logger.fatal({ err: error }, "Analytics worker crashed");
+
   await Promise.allSettled([redis.quit(), blockingRedis.quit()]);
+
   process.exit(1);
 });
